@@ -1297,7 +1297,7 @@ show_main_menu() {
     echo "  90) 查看帮助"
     echo "  99) 退出"
     echo ""
-    echo -ne "${YELLOW}请选择操作 [1-99]: ${NC}"
+    printf "${YELLOW}请选择操作 [1-99]: ${NC}"
 }
 
 # 交互式输入函数
@@ -1306,16 +1306,18 @@ read_input() {
     local default="$2"
     local input
     
+    # 使用printf而不是echo -ne，确保输出立即刷新
     if [[ -n "$default" ]]; then
-        echo -ne "${CYAN}$prompt${NC} [默认: $default]: "
+        printf "${CYAN}%s${NC} [默认: %s]: " "$prompt" "$default"
     else
-        echo -ne "${CYAN}$prompt${NC}: "
+        printf "${CYAN}%s${NC}: " "$prompt"
     fi
     
     # 确保输出立即刷新
-    # stty sane 2>/dev/null  # 恢复终端设置（如果需要）
-    
+    # 使用read -r读取输入，不解释反斜杠
     read -r input
+    
+    # 如果输入为空且有默认值，返回默认值
     if [[ -z "$input" && -n "$default" ]]; then
         echo "$default"
     else
@@ -1326,8 +1328,9 @@ read_input() {
 # 等待用户按键
 wait_for_key() {
     echo ""
-    echo -ne "${YELLOW}按回车键继续...${NC}"
+    printf "${YELLOW}按回车键继续...${NC}"
     read -r
+    echo ""  # 换行
 }
 
 # 交互式菜单处理
@@ -1741,9 +1744,11 @@ interactive_menu() {
                 echo -e "${YELLOW}  4. 强烈建议使用 Web 服务器层面进行过滤${NC}"
                 echo ""
                 
-                # 先询问是否继续
-                echo -ne "${CYAN}是否继续使用此功能？(yes/no)${NC} [默认: no]: "
+                # 先询问是否继续 - 使用简单直接的方式
+                printf "${CYAN}是否继续使用此功能？(yes/no)${NC} [默认: no]: "
                 read -r confirm_continue
+                echo ""  # 换行
+                
                 if [[ -z "$confirm_continue" ]]; then
                     confirm_continue="no"
                 fi
@@ -1752,75 +1757,89 @@ interactive_menu() {
                     log_info "操作已取消"
                     wait_for_key
                 else
-                    echo ""
-                    input1=$(read_input "User-Agent字符串" "")
+                    # 输入User-Agent字符串
+                    printf "${CYAN}User-Agent字符串${NC}: "
+                    read -r input1
+                    
                     if [[ -z "$input1" ]]; then
                         log_error "User-Agent字符串不能为空"
                         wait_for_key
                     else
-                        input2=$(read_input "端口 (默认: 80)" "80")
-                        input3=$(read_input "字节偏移量 (默认: 200，需要根据实际情况调整)" "200")
-                    
-                    # 显示确认信息
-                    echo ""
-                    echo -e "${CYAN}将要添加以下规则：${NC}"
-                    echo "  User-Agent: $input1"
-                    echo "  端口: $input2"
-                    echo "  偏移量: $input3"
-                    echo ""
-                    confirm=$(read_input "是否继续？(yes/no)" "no")
-                    
-                    if [[ "$confirm" == "yes" ]]; then
-                        # 调用屏蔽函数（不显示警告，因为已经显示过了）
-                        clear_screen
-                        log_info "正在添加 User-Agent 屏蔽规则..."
+                        # 输入端口
+                        printf "${CYAN}端口 (默认: 80)${NC} [默认: 80]: "
+                        read -r input2
+                        if [[ -z "$input2" ]]; then
+                            input2="80"
+                        fi
                         
-                        # 创建表和链（如果不存在）
-                        nft create table inet filter 2>/dev/null
-                        nft create chain inet filter input '{ type filter hook input priority 0; }' 2>/dev/null
+                        # 输入字节偏移量
+                        printf "${CYAN}字节偏移量 (默认: 200，需要根据实际情况调整)${NC} [默认: 200]: "
+                        read -r input3
+                        if [[ -z "$input3" ]]; then
+                            input3="200"
+                        fi
                         
-                        # 计算字符串长度（字节）
-                        match_string="User-Agent: $input1"
-                        string_length=$(echo -n "$match_string" | wc -c)
-                        length_bits=$((string_length * 8))
+                        # 显示确认信息
+                        echo ""
+                        echo -e "${CYAN}将要添加以下规则：${NC}"
+                        echo "  User-Agent: $input1"
+                        echo "  端口: $input2"
+                        echo "  偏移量: $input3"
+                        echo ""
                         
-                        # 添加规则
-                        # 注意：nftables payload匹配语法：@th,offset_bits,length_bits "string"
-                        # offset和length都是位（bits），不是字节
-                        # 将字节偏移量转换为位偏移量
-                        offset_bits=$((input3 * 8))
+                        # 最终确认
+                        printf "${CYAN}是否继续？(yes/no)${NC} [默认: no]: "
+                        read -r confirm
+                        echo ""  # 换行
                         
-                        log_info "正在尝试添加规则..."
-                        log_debug "偏移量: $input3 字节 = $offset_bits 位"
-                        log_debug "字符串长度: $string_length 字节 = $length_bits 位"
+                        if [[ -z "$confirm" ]]; then
+                            confirm="no"
+                        fi
                         
-                        # 构建完整的匹配字符串
-                        match_string="User-Agent: $input1"
-                        
-                        # 尝试添加规则（使用正确的nftables语法）
-                        # 注意：nftables的payload匹配可能需要使用@ih而不是@th
-                        # @ih表示inner header（传输层之后的数据）
-                        if nft add rule inet filter input tcp dport "$input2" @ih, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
-                            log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
-                            log_warn "请测试规则是否正常工作，如无效请调整偏移量"
-                            log_info "提示：使用 'tcpdump -A' 或 Wireshark 分析实际数据包来确定正确的偏移量"
-                        else
-                            # 如果@ih失败，尝试使用@th
-                            log_warn "使用@ih失败，尝试使用@th..."
-                            if nft add rule inet filter input tcp dport "$input2" @th, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
+                        if [[ "$confirm" == "yes" ]]; then
+                            # 执行添加规则操作
+                            clear_screen
+                            log_info "正在添加 User-Agent 屏蔽规则..."
+                            
+                            # 创建表和链（如果不存在）
+                            nft create table inet filter 2>/dev/null
+                            nft create chain inet filter input '{ type filter hook input priority 0; }' 2>/dev/null
+                            
+                            # 计算字符串长度（字节）
+                            match_string="User-Agent: $input1"
+                            string_length=$(echo -n "$match_string" | wc -c)
+                            length_bits=$((string_length * 8))
+                            
+                            # 将字节偏移量转换为位偏移量
+                            offset_bits=$((input3 * 8))
+                            
+                            log_info "正在尝试添加规则..."
+                            log_debug "偏移量: $input3 字节 = $offset_bits 位"
+                            log_debug "字符串长度: $string_length 字节 = $length_bits 位"
+                            
+                            # 尝试添加规则（使用正确的nftables语法）
+                            # 先尝试使用@ih（inner header，传输层之后的数据）
+                            if nft add rule inet filter input tcp dport "$input2" @ih, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
                                 log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
                                 log_warn "请测试规则是否正常工作，如无效请调整偏移量"
+                                log_info "提示：使用 'tcpdump -A' 或 Wireshark 分析实际数据包来确定正确的偏移量"
                             else
-                                log_error "添加规则失败，可能是语法错误或偏移量不正确"
-                                log_info "建议：使用 Web 服务器层面（nginx/Apache）进行 User-Agent 过滤"
-                                log_info "参考文档：nftables_user_agent_blocking.md"
-                                log_info "提示：nftables payload匹配需要精确的位偏移量，建议使用tcpdump分析实际数据包"
-                                log_info "提示：不同的nftables版本可能支持不同的payload匹配语法"
+                                # 如果@ih失败，尝试使用@th
+                                log_warn "使用@ih失败，尝试使用@th..."
+                                if nft add rule inet filter input tcp dport "$input2" @th, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
+                                    log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
+                                    log_warn "请测试规则是否正常工作，如无效请调整偏移量"
+                                else
+                                    log_error "添加规则失败，可能是语法错误或偏移量不正确"
+                                    log_info "建议：使用 Web 服务器层面（nginx/Apache）进行 User-Agent 过滤"
+                                    log_info "参考文档：nftables_user_agent_blocking.md"
+                                    log_info "提示：nftables payload匹配需要精确的位偏移量，建议使用tcpdump分析实际数据包"
+                                    log_info "提示：不同的nftables版本可能支持不同的payload匹配语法"
+                                fi
                             fi
+                        else
+                            log_info "操作已取消"
                         fi
-                    else
-                        log_info "操作已取消"
-                    fi
                         wait_for_key
                     fi
                 fi
