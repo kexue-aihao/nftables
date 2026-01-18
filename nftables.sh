@@ -243,7 +243,10 @@ ${CYAN}========================================
 ========================================${NC}
 
 ${GREEN}使用方法：${NC}
-  $SCRIPT_NAME [命令] [选项]
+  $SCRIPT_NAME                    # 进入交互式菜单模式（推荐）
+  $SCRIPT_NAME interactive         # 进入交互式菜单模式
+  $SCRIPT_NAME menu                # 进入交互式菜单模式
+  $SCRIPT_NAME [命令] [选项]        # 命令行模式
 
 ${GREEN}基本命令：${NC}
   list          - 列出所有规则
@@ -1193,9 +1196,569 @@ set_quota() {
     log_success "已设置配额: $quota"
 }
 
+# 清屏函数
+clear_screen() {
+    clear
+}
+
+# 显示主菜单
+show_main_menu() {
+    clear_screen
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${CYAN}  nftables 全面管理脚本 - 交互式菜单${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo ""
+    echo -e "${GREEN}【基本操作】${NC}"
+    echo "  1) 列出所有规则"
+    echo "  2) 显示状态和统计"
+    echo "  3) 保存规则"
+    echo "  4) 恢复规则"
+    echo "  5) 备份规则"
+    echo "  6) 清空所有规则"
+    echo "  7) 重置nftables"
+    echo ""
+    echo -e "${GREEN}【表管理】${NC}"
+    echo "  11) 列出所有表"
+    echo "  12) 创建表"
+    echo "  13) 删除表"
+    echo "  14) 清空表"
+    echo ""
+    echo -e "${GREEN}【链管理】${NC}"
+    echo "  21) 列出链"
+    echo "  22) 创建链"
+    echo "  23) 删除链"
+    echo "  24) 清空链"
+    echo ""
+    echo -e "${GREEN}【规则管理】${NC}"
+    echo "  31) 添加规则"
+    echo "  32) 删除规则"
+    echo "  33) 插入规则"
+    echo "  34) 替换规则"
+    echo ""
+    echo -e "${GREEN}【集合管理】${NC}"
+    echo "  41) 列出集合"
+    echo "  42) 创建集合"
+    echo "  43) 添加元素到集合"
+    echo "  44) 从集合删除元素"
+    echo ""
+    echo -e "${GREEN}【常用功能】${NC}"
+    echo "  51) 允许IP访问"
+    echo "  52) 屏蔽IP"
+    echo "  53) 允许端口"
+    echo "  54) 屏蔽端口"
+    echo "  55) 端口转发"
+    echo "  56) 设置SNAT"
+    echo "  57) 设置DNAT"
+    echo "  58) 设置MASQUERADE"
+    echo ""
+    echo -e "${GREEN}【黑名单/白名单】${NC}"
+    echo "  61) 添加IP到黑名单"
+    echo "  62) 从黑名单移除IP"
+    echo "  63) 列出黑名单"
+    echo "  64) 添加IP到白名单"
+    echo "  65) 从白名单移除IP"
+    echo "  66) 列出白名单"
+    echo ""
+    echo -e "${GREEN}【高级功能】${NC}"
+    echo "  71) 启用规则日志"
+    echo "  72) 创建计数器"
+    echo "  73) 设置配额"
+    echo "  74) 屏蔽User-Agent"
+    echo "  75) 字符串匹配"
+    echo ""
+    echo -e "${GREEN}【其他】${NC}"
+    echo "  90) 查看帮助"
+    echo "  99) 退出"
+    echo ""
+    echo -ne "${YELLOW}请选择操作 [1-99]: ${NC}"
+}
+
+# 交互式输入函数
+read_input() {
+    local prompt="$1"
+    local default="$2"
+    local input
+    
+    if [[ -n "$default" ]]; then
+        echo -ne "${CYAN}$prompt${NC} [默认: $default]: "
+    else
+        echo -ne "${CYAN}$prompt${NC}: "
+    fi
+    
+    read input
+    if [[ -z "$input" && -n "$default" ]]; then
+        echo "$default"
+    else
+        echo "$input"
+    fi
+}
+
+# 等待用户按键
+wait_for_key() {
+    echo ""
+    echo -ne "${YELLOW}按回车键继续...${NC}"
+    read -r
+}
+
+# 交互式菜单处理
+interactive_menu() {
+    local choice
+    local input1 input2 input3 input4 input5 input6 input7
+    
+    while true; do
+        show_main_menu
+        read choice
+        
+        case "$choice" in
+            1)
+                clear_screen
+                list_rules "all"
+                wait_for_key
+                ;;
+            2)
+                clear_screen
+                show_status
+                wait_for_key
+                ;;
+            3)
+                clear_screen
+                input1=$(read_input "保存规则文件路径" "$NFTABLES_SAVE_FILE")
+                save_rules "$input1"
+                wait_for_key
+                ;;
+            4)
+                clear_screen
+                input1=$(read_input "恢复规则文件路径" "$NFTABLES_SAVE_FILE")
+                restore_rules "$input1"
+                wait_for_key
+                ;;
+            5)
+                clear_screen
+                backup_rules
+                wait_for_key
+                ;;
+            6)
+                clear_screen
+                flush_rules "all"
+                wait_for_key
+                ;;
+            7)
+                clear_screen
+                reset_nftables
+                wait_for_key
+                ;;
+            11)
+                clear_screen
+                input1=$(read_input "地址族" "all")
+                list_tables "$input1"
+                wait_for_key
+                ;;
+            12)
+                clear_screen
+                input1=$(read_input "地址族 (ip/ip6/inet/arp/bridge/netdev)" "inet")
+                input2=$(read_input "表名称" "filter")
+                create_table "$input1" "$input2"
+                wait_for_key
+                ;;
+            13)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                delete_table "$input1" "$input2"
+                wait_for_key
+                ;;
+            14)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                flush_table "$input1" "$input2"
+                wait_for_key
+                ;;
+            21)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "")
+                list_chains "$input1" "$input2"
+                wait_for_key
+                ;;
+            22)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                input3=$(read_input "链名称" "input")
+                input4=$(read_input "链定义 (可选，如: '{ type filter hook input priority 0; }')" "")
+                create_chain "$input1" "$input2" "$input3" "$input4"
+                wait_for_key
+                ;;
+            23)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                input3=$(read_input "链名称" "")
+                delete_chain "$input1" "$input2" "$input3"
+                wait_for_key
+                ;;
+            24)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                input3=$(read_input "链名称" "")
+                flush_chain "$input1" "$input2" "$input3"
+                wait_for_key
+                ;;
+            31)
+                clear_screen
+                echo -e "${YELLOW}添加规则（使用nftables原生语法）${NC}"
+                echo -e "${BLUE}示例: rule inet filter input tcp dport 22 accept${NC}"
+                echo ""
+                input1=$(read_input "规则内容" "")
+                if [[ -n "$input1" ]]; then
+                    nft add $input1
+                    if [[ $? -eq 0 ]]; then
+                        log_success "规则已添加"
+                    else
+                        log_error "添加规则失败"
+                    fi
+                else
+                    log_error "规则内容不能为空"
+                fi
+                wait_for_key
+                ;;
+            32)
+                clear_screen
+                echo -e "${YELLOW}删除规则${NC}"
+                echo -e "${BLUE}示例: rule inet filter input handle 1${NC}"
+                echo ""
+                input1=$(read_input "规则内容" "")
+                if [[ -n "$input1" ]]; then
+                    nft delete $input1
+                    if [[ $? -eq 0 ]]; then
+                        log_success "规则已删除"
+                    else
+                        log_error "删除规则失败"
+                    fi
+                else
+                    log_error "规则内容不能为空"
+                fi
+                wait_for_key
+                ;;
+            33)
+                clear_screen
+                echo -e "${YELLOW}插入规则${NC}"
+                echo -e "${BLUE}示例: rule inet filter input position 0 tcp dport 22 accept${NC}"
+                echo ""
+                input1=$(read_input "规则内容" "")
+                if [[ -n "$input1" ]]; then
+                    nft insert $input1
+                    if [[ $? -eq 0 ]]; then
+                        log_success "规则已插入"
+                    else
+                        log_error "插入规则失败"
+                    fi
+                else
+                    log_error "规则内容不能为空"
+                fi
+                wait_for_key
+                ;;
+            34)
+                clear_screen
+                echo -e "${YELLOW}替换规则${NC}"
+                echo -e "${BLUE}示例: rule inet filter input handle 1 tcp dport 22 accept${NC}"
+                echo ""
+                input1=$(read_input "规则内容" "")
+                if [[ -n "$input1" ]]; then
+                    nft replace $input1
+                    if [[ $? -eq 0 ]]; then
+                        log_success "规则已替换"
+                    else
+                        log_error "替换规则失败"
+                    fi
+                else
+                    log_error "规则内容不能为空"
+                fi
+                wait_for_key
+                ;;
+            41)
+                clear_screen
+                input1=$(read_input "地址族" "all")
+                input2=$(read_input "表名称" "")
+                set_list "$input1" "$input2"
+                wait_for_key
+                ;;
+            42)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                input3=$(read_input "集合名称" "")
+                input4=$(read_input "类型 (如: ipv4_addr)" "")
+                input5=$(read_input "标志 (可选，如: timeout 1h)" "")
+                create_set "$input1" "$input2" "$input3" "$input4" "$input5"
+                wait_for_key
+                ;;
+            43)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                input3=$(read_input "集合名称" "")
+                input4=$(read_input "元素 (用空格分隔，如: 192.168.1.1 10.0.0.1)" "")
+                if [[ -n "$input4" ]]; then
+                    set_add "$input1" "$input2" "$input3" $input4
+                else
+                    log_error "元素不能为空"
+                fi
+                wait_for_key
+                ;;
+            44)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                input3=$(read_input "集合名称" "")
+                input4=$(read_input "元素 (用空格分隔)" "")
+                if [[ -n "$input4" ]]; then
+                    set_delete "$input1" "$input2" "$input3" $input4
+                else
+                    log_error "元素不能为空"
+                fi
+                wait_for_key
+                ;;
+            51)
+                clear_screen
+                input1=$(read_input "IP地址" "")
+                input2=$(read_input "地址族" "inet")
+                input3=$(read_input "表名称" "filter")
+                input4=$(read_input "链名称" "input")
+                if [[ -n "$input1" ]]; then
+                    allow_ip "$input1" "$input2" "$input3" "$input4"
+                else
+                    log_error "IP地址不能为空"
+                fi
+                wait_for_key
+                ;;
+            52)
+                clear_screen
+                input1=$(read_input "IP地址" "")
+                input2=$(read_input "地址族" "inet")
+                input3=$(read_input "表名称" "filter")
+                input4=$(read_input "链名称" "input")
+                if [[ -n "$input1" ]]; then
+                    block_ip "$input1" "$input2" "$input3" "$input4"
+                else
+                    log_error "IP地址不能为空"
+                fi
+                wait_for_key
+                ;;
+            53)
+                clear_screen
+                input1=$(read_input "端口号" "")
+                input2=$(read_input "协议 (tcp/udp)" "tcp")
+                input3=$(read_input "地址族" "inet")
+                input4=$(read_input "表名称" "filter")
+                input5=$(read_input "链名称" "input")
+                if [[ -n "$input1" ]]; then
+                    allow_port "$input1" "$input2" "$input3" "$input4" "$input5"
+                else
+                    log_error "端口号不能为空"
+                fi
+                wait_for_key
+                ;;
+            54)
+                clear_screen
+                input1=$(read_input "端口号" "")
+                input2=$(read_input "协议 (tcp/udp)" "tcp")
+                input3=$(read_input "地址族" "inet")
+                input4=$(read_input "表名称" "filter")
+                input5=$(read_input "链名称" "input")
+                if [[ -n "$input1" ]]; then
+                    block_port "$input1" "$input2" "$input3" "$input4" "$input5"
+                else
+                    log_error "端口号不能为空"
+                fi
+                wait_for_key
+                ;;
+            55)
+                clear_screen
+                input1=$(read_input "本地端口" "")
+                input2=$(read_input "目标IP" "")
+                input3=$(read_input "目标端口" "")
+                input4=$(read_input "协议 (tcp/udp)" "tcp")
+                if [[ -n "$input1" && -n "$input2" && -n "$input3" ]]; then
+                    set_forward "$input1" "$input2" "$input3" "$input4"
+                else
+                    log_error "所有参数都是必需的"
+                fi
+                wait_for_key
+                ;;
+            56)
+                clear_screen
+                input1=$(read_input "源网络 (如: 192.168.1.0/24)" "")
+                input2=$(read_input "公网IP" "")
+                if [[ -n "$input1" && -n "$input2" ]]; then
+                    set_snat "$input1" "$input2"
+                else
+                    log_error "所有参数都是必需的"
+                fi
+                wait_for_key
+                ;;
+            57)
+                clear_screen
+                input1=$(read_input "公网端口" "")
+                input2=$(read_input "内网IP" "")
+                input3=$(read_input "内网端口" "")
+                input4=$(read_input "协议 (tcp/udp)" "tcp")
+                if [[ -n "$input1" && -n "$input2" && -n "$input3" ]]; then
+                    set_dnat "$input1" "$input2" "$input3" "$input4"
+                else
+                    log_error "所有参数都是必需的"
+                fi
+                wait_for_key
+                ;;
+            58)
+                clear_screen
+                input1=$(read_input "接口名称 (留空表示所有接口)" "+")
+                set_masquerade "$input1"
+                wait_for_key
+                ;;
+            61)
+                clear_screen
+                input1=$(read_input "IP地址" "")
+                if [[ -n "$input1" ]]; then
+                    blacklist_add "$input1"
+                else
+                    log_error "IP地址不能为空"
+                fi
+                wait_for_key
+                ;;
+            62)
+                clear_screen
+                input1=$(read_input "IP地址" "")
+                if [[ -n "$input1" ]]; then
+                    blacklist_remove "$input1"
+                else
+                    log_error "IP地址不能为空"
+                fi
+                wait_for_key
+                ;;
+            63)
+                clear_screen
+                blacklist_list
+                wait_for_key
+                ;;
+            64)
+                clear_screen
+                input1=$(read_input "IP地址" "")
+                if [[ -n "$input1" ]]; then
+                    whitelist_add "$input1"
+                else
+                    log_error "IP地址不能为空"
+                fi
+                wait_for_key
+                ;;
+            65)
+                clear_screen
+                input1=$(read_input "IP地址" "")
+                if [[ -n "$input1" ]]; then
+                    whitelist_remove "$input1"
+                else
+                    log_error "IP地址不能为空"
+                fi
+                wait_for_key
+                ;;
+            66)
+                clear_screen
+                whitelist_list
+                wait_for_key
+                ;;
+            71)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                input3=$(read_input "链名称" "input")
+                input4=$(read_input "日志前缀" "NFTABLES")
+                enable_log "$input1" "$input2" "$input3" "$input4"
+                wait_for_key
+                ;;
+            72)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                input3=$(read_input "计数器名称" "")
+                if [[ -n "$input3" ]]; then
+                    create_counter "$input1" "$input2" "$input3"
+                else
+                    log_error "计数器名称不能为空"
+                fi
+                wait_for_key
+                ;;
+            73)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                input3=$(read_input "链名称" "input")
+                input4=$(read_input "配额 (如: over 10 mbytes)" "")
+                if [[ -n "$input4" ]]; then
+                    set_quota "$input1" "$input2" "$input3" "$input4"
+                else
+                    log_error "配额不能为空"
+                fi
+                wait_for_key
+                ;;
+            74)
+                clear_screen
+                input1=$(read_input "User-Agent字符串" "")
+                input2=$(read_input "端口" "80")
+                input3=$(read_input "字节偏移量" "200")
+                if [[ -n "$input1" ]]; then
+                    block_user_agent "$input1" "$input2" "$input3"
+                else
+                    log_error "User-Agent字符串不能为空"
+                fi
+                wait_for_key
+                ;;
+            75)
+                clear_screen
+                input1=$(read_input "地址族" "inet")
+                input2=$(read_input "表名称" "filter")
+                input3=$(read_input "链名称" "input")
+                input4=$(read_input "字符串" "")
+                input5=$(read_input "端口" "80")
+                input6=$(read_input "字节偏移量" "200")
+                input7=$(read_input "动作 (drop/reject)" "drop")
+                if [[ -n "$input4" ]]; then
+                    string_match "$input1" "$input2" "$input3" "$input4" "$input5" "$input6" "$input7"
+                else
+                    log_error "字符串不能为空"
+                fi
+                wait_for_key
+                ;;
+            90)
+                clear_screen
+                show_help
+                wait_for_key
+                ;;
+            99)
+                clear_screen
+                echo -e "${GREEN}感谢使用 nftables 管理脚本！${NC}"
+                echo ""
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}无效的选择，请重新输入${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
 # 主函数
 main() {
-    local command="${1:-help}"
+    local command="${1:-}"
+    
+    # 如果没有参数或参数为 interactive/menu，进入交互模式
+    if [[ -z "$command" ]] || [[ "$command" == "interactive" ]] || [[ "$command" == "menu" ]]; then
+        init_check
+        interactive_menu
+        return
+    fi
     
     case "$command" in
         help|--help|-h)
