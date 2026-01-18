@@ -1297,7 +1297,7 @@ show_main_menu() {
     echo "  90) 查看帮助"
     echo "  99) 退出"
     echo ""
-    printf "${YELLOW}请选择操作 [1-99]: ${NC}"
+    echo -ne "${YELLOW}请选择操作 [1-99]: ${NC}" >&2
 }
 
 # 交互式输入函数
@@ -1306,16 +1306,15 @@ read_input() {
     local default="$2"
     local input
     
-    # 使用printf而不是echo -ne，确保输出立即刷新
+    # 使用echo -ne输出到stderr，确保立即显示
     if [[ -n "$default" ]]; then
-        printf "${CYAN}%s${NC} [默认: %s]: " "$prompt" "$default"
+        echo -ne "${CYAN}$prompt${NC} [默认: $default]: " >&2
     else
-        printf "${CYAN}%s${NC}: " "$prompt"
+        echo -ne "${CYAN}$prompt${NC}: " >&2
     fi
     
-    # 确保输出立即刷新
-    # 使用read -r读取输入，不解释反斜杠
-    read -r input
+    # 确保从终端读取输入
+    read -r input < /dev/tty 2>/dev/null || read -r input
     
     # 如果输入为空且有默认值，返回默认值
     if [[ -z "$input" && -n "$default" ]]; then
@@ -1328,8 +1327,8 @@ read_input() {
 # 等待用户按键
 wait_for_key() {
     echo ""
-    printf "${YELLOW}按回车键继续...${NC}"
-    read -r
+    echo -ne "${YELLOW}按回车键继续...${NC}" >&2
+    read -r < /dev/tty 2>/dev/null || read -r
     echo ""  # 换行
 }
 
@@ -1338,9 +1337,15 @@ interactive_menu() {
     local choice
     local input1 input2 input3 input4 input5 input6 input7
     
+    # 确保从终端读取输入
+    if [[ ! -t 0 ]]; then
+        exec < /dev/tty
+    fi
+    
     while true; do
         show_main_menu
-        read choice
+        # 从终端读取选择
+        read -r choice < /dev/tty 2>/dev/null || read -r choice
         
         case "$choice" in
             1)
@@ -1744,9 +1749,12 @@ interactive_menu() {
                 echo -e "${YELLOW}  4. 强烈建议使用 Web 服务器层面进行过滤${NC}"
                 echo ""
                 
-                # 先询问是否继续 - 使用简单直接的方式
-                printf "${CYAN}是否继续使用此功能？(yes/no)${NC} [默认: no]: "
-                read -r confirm_continue
+                # 先询问是否继续 - 使用简单直接的方式，确保输出立即刷新
+                {
+                    echo -ne "${CYAN}是否继续使用此功能？(yes/no)${NC} [默认: no]: "
+                } >&2
+                # 从终端读取输入
+                read -r confirm_continue < /dev/tty 2>/dev/null || read -r confirm_continue
                 echo ""  # 换行
                 
                 if [[ -z "$confirm_continue" ]]; then
@@ -1758,23 +1766,29 @@ interactive_menu() {
                     wait_for_key
                 else
                     # 输入User-Agent字符串
-                    printf "${CYAN}User-Agent字符串${NC}: "
-                    read -r input1
+                    {
+                        echo -ne "${CYAN}User-Agent字符串${NC}: "
+                    } >&2
+                    read -r input1 < /dev/tty 2>/dev/null || read -r input1
                     
                     if [[ -z "$input1" ]]; then
                         log_error "User-Agent字符串不能为空"
                         wait_for_key
                     else
                         # 输入端口
-                        printf "${CYAN}端口 (默认: 80)${NC} [默认: 80]: "
-                        read -r input2
+                        {
+                            echo -ne "${CYAN}端口 (默认: 80)${NC} [默认: 80]: "
+                        } >&2
+                        read -r input2 < /dev/tty 2>/dev/null || read -r input2
                         if [[ -z "$input2" ]]; then
                             input2="80"
                         fi
                         
                         # 输入字节偏移量
-                        printf "${CYAN}字节偏移量 (默认: 200，需要根据实际情况调整)${NC} [默认: 200]: "
-                        read -r input3
+                        {
+                            echo -ne "${CYAN}字节偏移量 (默认: 200，需要根据实际情况调整)${NC} [默认: 200]: "
+                        } >&2
+                        read -r input3 < /dev/tty 2>/dev/null || read -r input3
                         if [[ -z "$input3" ]]; then
                             input3="200"
                         fi
@@ -1788,8 +1802,10 @@ interactive_menu() {
                         echo ""
                         
                         # 最终确认
-                        printf "${CYAN}是否继续？(yes/no)${NC} [默认: no]: "
-                        read -r confirm
+                        {
+                            echo -ne "${CYAN}是否继续？(yes/no)${NC} [默认: no]: "
+                        } >&2
+                        read -r confirm < /dev/tty 2>/dev/null || read -r confirm
                         echo ""  # 换行
                         
                         if [[ -z "$confirm" ]]; then
