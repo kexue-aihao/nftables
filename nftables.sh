@@ -1085,19 +1085,21 @@ block_user_agent() {
         return 1
     fi
     
-    # 显示警告
-    log_warn ""
-    log_warn "⚠️  警告：使用 nftables 屏蔽 User-Agent 有以下限制："
-    log_warn "  1. 仅适用于明文 HTTP（HTTPS 无法使用）"
-    log_warn "  2. HTTP 头位置可变，可能导致匹配失败"
-    log_warn "  3. 不适用于 HTTP/2"
-    log_warn "  4. 强烈建议使用 Web 服务器层面进行过滤"
-    log_warn ""
-    
-    read -p "是否继续？(yes/no): " confirm
-    if [[ "$confirm" != "yes" ]]; then
-        log_info "操作已取消"
-        return
+    # 显示警告（只在非交互模式显示）
+    if [[ -t 0 ]]; then
+        log_warn ""
+        log_warn "⚠️  警告：使用 nftables 屏蔽 User-Agent 有以下限制："
+        log_warn "  1. 仅适用于明文 HTTP（HTTPS 无法使用）"
+        log_warn "  2. HTTP 头位置可变，可能导致匹配失败"
+        log_warn "  3. 不适用于 HTTP/2"
+        log_warn "  4. 强烈建议使用 Web 服务器层面进行过滤"
+        log_warn ""
+        
+        read -p "是否继续？(yes/no): " confirm
+        if [[ "$confirm" != "yes" ]]; then
+            log_info "操作已取消"
+            return
+        fi
     fi
     
     # 创建表和链（如果不存在）
@@ -1706,15 +1708,57 @@ interactive_menu() {
                 ;;
             74)
                 clear_screen
+                echo -e "${YELLOW}⚠️  警告：使用 nftables 屏蔽 User-Agent 有以下限制：${NC}"
+                echo -e "${YELLOW}  1. 仅适用于明文 HTTP（HTTPS 无法使用）${NC}"
+                echo -e "${YELLOW}  2. HTTP 头位置可变，可能导致匹配失败${NC}"
+                echo -e "${YELLOW}  3. 不适用于 HTTP/2${NC}"
+                echo -e "${YELLOW}  4. 强烈建议使用 Web 服务器层面进行过滤${NC}"
+                echo ""
                 input1=$(read_input "User-Agent字符串" "")
-                input2=$(read_input "端口" "80")
-                input3=$(read_input "字节偏移量" "200")
-                if [[ -n "$input1" ]]; then
-                    block_user_agent "$input1" "$input2" "$input3"
-                else
+                if [[ -z "$input1" ]]; then
                     log_error "User-Agent字符串不能为空"
+                    wait_for_key
+                else
+                    input2=$(read_input "端口 (默认: 80)" "80")
+                    input3=$(read_input "字节偏移量 (默认: 200，需要根据实际情况调整)" "200")
+                    
+                    # 显示确认信息
+                    echo ""
+                    echo -e "${CYAN}将要添加以下规则：${NC}"
+                    echo "  User-Agent: $input1"
+                    echo "  端口: $input2"
+                    echo "  偏移量: $input3"
+                    echo ""
+                    confirm=$(read_input "是否继续？(yes/no)" "no")
+                    
+                    if [[ "$confirm" == "yes" ]]; then
+                        # 调用屏蔽函数（不显示警告，因为已经显示过了）
+                        clear_screen
+                        log_info "正在添加 User-Agent 屏蔽规则..."
+                        
+                        # 创建表和链（如果不存在）
+                        nft create table inet filter 2>/dev/null
+                        nft create chain inet filter input '{ type filter hook input priority 0; }' 2>/dev/null
+                        
+                        # 计算字符串长度（字节）
+                        string_length=$(echo -n "User-Agent: $input1" | wc -c)
+                        length_bits=$((string_length * 8))
+                        
+                        # 添加规则
+                        if nft add rule inet filter input tcp dport "$input2" @th, "$input3", "$length_bits" "{ \"User-Agent: $input1\" }" drop 2>/dev/null; then
+                            log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
+                            log_warn "请测试规则是否正常工作，如无效请调整偏移量"
+                            log_info "提示：使用 'tcpdump -A' 或 Wireshark 分析实际数据包来确定正确的偏移量"
+                        else
+                            log_error "添加规则失败"
+                            log_info "建议：使用 Web 服务器层面（nginx/Apache）进行 User-Agent 过滤"
+                            log_info "参考文档：nftables_user_agent_blocking.md"
+                        fi
+                    else
+                        log_info "操作已取消"
+                    fi
+                    wait_for_key
                 fi
-                wait_for_key
                 ;;
             75)
                 clear_screen
