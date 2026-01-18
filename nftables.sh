@@ -1291,8 +1291,22 @@ block_tcping_detection() {
     fi
     
     # 创建表和链（如果不存在）
-    nft create table "$family" "$table" 2>/dev/null
-    nft create chain "$family" "$table" "$chain" '{ type filter hook input priority 0; }' 2>/dev/null
+    if ! nft list table "$family" "$table" >/dev/null 2>&1; then
+        log_info "创建表: $family $table"
+        nft create table "$family" "$table" 2>/dev/null || {
+            log_error "创建表失败: $family $table"
+            return 1
+        }
+    fi
+    
+    # 检查链是否存在，如果不存在则创建
+    if ! nft list chain "$family" "$table" "$chain" >/dev/null 2>&1; then
+        log_info "创建链: $family $table $chain"
+        nft create chain "$family" "$table" "$chain" '{ type filter hook input priority 0; }' 2>/dev/null || {
+            log_error "创建链失败: $family $table $chain"
+            log_info "提示：链可能已存在但配置不同，尝试使用现有链..."
+        }
+    fi
     
     # 判断是IP还是域名
     local ip_list=()
@@ -1335,19 +1349,54 @@ block_tcping_detection() {
         # 跳过空值
         [[ -z "$ip" ]] && continue
         
-        # 检查规则是否已存在（使用-F选项进行固定字符串匹配，避免特殊字符问题）
-        if nft list chain "$family" "$table" "$chain" 2>/dev/null | grep -qF "ip saddr $ip"; then
+        # 检查规则是否已存在
+        local rule_exists=false
+        local chain_rules
+        chain_rules=$(nft list chain "$family" "$table" "$chain" 2>/dev/null || true)
+        
+        if [[ -n "$chain_rules" ]]; then
+            # 检查是否已有针对该IP的屏蔽规则
+            if echo "$chain_rules" | grep -qE "ip saddr[[:space:]]+${ip}([[:space:]]|/)" || \
+               echo "$chain_rules" | grep -qE "ip saddr[[:space:]]+${ip//./\\.}"; then
+                rule_exists=true
+            fi
+        fi
+        
+        if [[ "$rule_exists" == "true" ]]; then
             log_warn "规则已存在: $ip (跳过)"
             continue
         fi
         
-        # 添加屏蔽规则：屏蔽来自该IP的所有TCP连接（包括tcping）
-        if nft add rule "$family" "$table" "$chain" ip saddr "$ip" tcp drop 2>/dev/null; then
+        # 添加屏蔽规则：屏蔽来自该IP的所有连接（包括tcping）
+        # 使用 drop 屏蔽所有协议，这样可以阻止tcping检测
+        # 参考 block_ip 函数的成功实现: ip saddr "$ip" drop
+        local add_output
+        local add_result
+        
+        # 方法1：屏蔽所有协议（推荐，更可靠，与block_ip函数一致）
+        add_output=$(nft add rule "$family" "$table" "$chain" ip saddr "$ip" drop 2>&1)
+        add_result=$?
+        
+        if [[ $add_result -eq 0 ]]; then
             log_success "已屏蔽IP: $ip (阻止tcping检测)"
             ((count++))
         else
-            log_error "屏蔽IP失败: $ip"
-            log_debug "尝试添加的命令: nft add rule $family $table $chain ip saddr $ip tcp drop"
+            log_debug "方法1失败，错误: $add_output"
+            
+            # 方法2：只屏蔽TCP协议（如果方法1失败）
+            log_info "尝试只屏蔽TCP协议..."
+            add_output=$(nft add rule "$family" "$table" "$chain" ip saddr "$ip" tcp drop 2>&1)
+            add_result=$?
+            
+            if [[ $add_result -eq 0 ]]; then
+                log_success "已屏蔽IP: $ip (阻止tcping检测 - TCP协议)"
+                ((count++))
+            else
+                log_error "屏蔽IP失败: $ip"
+                log_debug "所有方法都失败，最后错误: $add_output"
+                log_info "提示：可能是链配置问题，请检查链是否正确创建"
+                log_info "提示：可以尝试使用【52号选项：屏蔽IP】功能"
+            fi
         fi
     done
     
