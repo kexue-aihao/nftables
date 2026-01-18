@@ -1223,27 +1223,33 @@ set_quota() {
     log_success "已设置配额: $quota"
 }
 
-# 查找检测网站IP地址
+# 查找检测网站IP地址（只返回IP，日志输出到stderr）
 find_detection_ips() {
     local domain="$1"
+    local quiet="${2:-false}"  # 是否静默模式（不输出日志）
     
     if [[ -z "$domain" ]]; then
-        log_error "用法: find-detection-ips <domain>"
+        log_error "用法: find-detection-ips <domain> [quiet]" >&2
         return 1
     fi
     
-    log_info "正在查找 $domain 的IP地址..."
+    if [[ "$quiet" != "true" ]]; then
+        log_info "正在查找 $domain 的IP地址..." >&2
+    fi
     
     # 使用dig查找
     local ips
     ips=$(dig +short "$domain" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true)
     
     if [[ -n "$ips" ]]; then
-        echo -e "${CYAN}$domain 的IP地址：${NC}" >&2
-        echo "$ips" | while IFS= read -r ip; do
-            [[ -n "$ip" ]] && echo "  - $ip" >&2
-        done
-        echo "" >&2
+        if [[ "$quiet" != "true" ]]; then
+            echo -e "${CYAN}$domain 的IP地址：${NC}" >&2
+            echo "$ips" | while IFS= read -r ip; do
+                [[ -n "$ip" ]] && echo "  - $ip" >&2
+            done
+            echo "" >&2
+        fi
+        # 只输出IP地址到stdout
         echo "$ips"
         return 0
     fi
@@ -1252,16 +1258,21 @@ find_detection_ips() {
     ips=$(nslookup "$domain" 2>/dev/null | grep -E '^Address:' | awk '{print $2}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true)
     
     if [[ -n "$ips" ]]; then
-        echo -e "${CYAN}$domain 的IP地址：${NC}" >&2
-        echo "$ips" | while IFS= read -r ip; do
-            [[ -n "$ip" ]] && echo "  - $ip" >&2
-        done
-        echo "" >&2
+        if [[ "$quiet" != "true" ]]; then
+            echo -e "${CYAN}$domain 的IP地址：${NC}" >&2
+            echo "$ips" | while IFS= read -r ip; do
+                [[ -n "$ip" ]] && echo "  - $ip" >&2
+            done
+            echo "" >&2
+        fi
+        # 只输出IP地址到stdout
         echo "$ips"
         return 0
     fi
     
-    log_error "无法找到 $domain 的IP地址"
+    if [[ "$quiet" != "true" ]]; then
+        log_error "无法找到 $domain 的IP地址" >&2
+    fi
     return 1
 }
 
@@ -1294,11 +1305,23 @@ block_tcping_detection() {
         # 是域名，需要解析
         log_info "正在解析域名: $ip_or_domain"
         local ips
-        ips=$(find_detection_ips "$ip_or_domain")
-        if [[ $? -eq 0 && -n "$ips" ]]; then
+        ips=$(find_detection_ips "$ip_or_domain" "false")
+        local find_result=$?
+        
+        if [[ $find_result -eq 0 && -n "$ips" ]]; then
+            # 清理IP列表，只保留有效的IP地址
             while IFS= read -r ip; do
-                [[ -n "$ip" ]] && ip_list+=("$ip")
+                # 过滤掉空行和包含非IP字符的行
+                if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    ip_list+=("$ip")
+                fi
             done <<< "$ips"
+            
+            if [[ ${#ip_list[@]} -eq 0 ]]; then
+                log_error "无法解析域名: $ip_or_domain（未找到有效IP地址）"
+                log_info "提示：可以手动输入IP地址"
+                return 1
+            fi
         else
             log_error "无法解析域名: $ip_or_domain"
             log_info "提示：可以手动输入IP地址"
@@ -1309,8 +1332,11 @@ block_tcping_detection() {
     # 添加屏蔽规则
     local count=0
     for ip in "${ip_list[@]}"; do
-        # 检查规则是否已存在
-        if nft list chain "$family" "$table" "$chain" 2>/dev/null | grep -q "ip saddr $ip"; then
+        # 跳过空值
+        [[ -z "$ip" ]] && continue
+        
+        # 检查规则是否已存在（使用-F选项进行固定字符串匹配，避免特殊字符问题）
+        if nft list chain "$family" "$table" "$chain" 2>/dev/null | grep -qF "ip saddr $ip"; then
             log_warn "规则已存在: $ip (跳过)"
             continue
         fi
@@ -1321,6 +1347,7 @@ block_tcping_detection() {
             ((count++))
         else
             log_error "屏蔽IP失败: $ip"
+            log_debug "尝试添加的命令: nft add rule $family $table $chain ip saddr $ip tcp drop"
         fi
     done
     
@@ -2127,15 +2154,18 @@ interactive_menu() {
                     # 执行屏蔽操作
                     clear_screen
                     
-                    # 如果是域名且选择自动查找，先查找相关IP
+                    # 如果是域名且选择自动查找，先查找相关IP（仅显示，不重复解析）
                     if [[ "$auto_find" == "yes" && ! "$input1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]]; then
                         log_info "正在查找 $input1 的相关IP地址..."
-                        local found_ips
-                        found_ips=$(find_detection_ips "$input1")
-                        if [[ $? -eq 0 && -n "$found_ips" ]]; then
-                            log_info "找到以下IP地址，将全部屏蔽："
-                            echo "$found_ips" | while IFS= read -r ip; do
-                                [[ -n "$ip" ]] && echo "  - $ip"
+                        # 临时禁用日志输出，只获取IP（使用静默模式）
+                        local temp_ips
+                        temp_ips=$(find_detection_ips "$input1" "true")
+                        if [[ -n "$temp_ips" ]]; then
+                            echo -e "${CYAN}找到以下IP地址，将全部屏蔽：${NC}"
+                            echo "$temp_ips" | while IFS= read -r ip; do
+                                if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                                    echo "  - $ip"
+                                fi
                             done
                             echo ""
                         fi
