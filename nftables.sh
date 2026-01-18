@@ -1223,6 +1223,163 @@ set_quota() {
     log_success "已设置配额: $quota"
 }
 
+# 查找检测网站IP地址
+find_detection_ips() {
+    local domain="$1"
+    
+    if [[ -z "$domain" ]]; then
+        log_error "用法: find-detection-ips <domain>"
+        return 1
+    fi
+    
+    log_info "正在查找 $domain 的IP地址..."
+    
+    # 使用dig查找
+    local ips
+    ips=$(dig +short "$domain" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true)
+    
+    if [[ -n "$ips" ]]; then
+        echo -e "${CYAN}$domain 的IP地址：${NC}" >&2
+        echo "$ips" | while IFS= read -r ip; do
+            [[ -n "$ip" ]] && echo "  - $ip" >&2
+        done
+        echo "" >&2
+        echo "$ips"
+        return 0
+    fi
+    
+    # 如果dig失败，尝试nslookup
+    ips=$(nslookup "$domain" 2>/dev/null | grep -E '^Address:' | awk '{print $2}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true)
+    
+    if [[ -n "$ips" ]]; then
+        echo -e "${CYAN}$domain 的IP地址：${NC}" >&2
+        echo "$ips" | while IFS= read -r ip; do
+            [[ -n "$ip" ]] && echo "  - $ip" >&2
+        done
+        echo "" >&2
+        echo "$ips"
+        return 0
+    fi
+    
+    log_error "无法找到 $domain 的IP地址"
+    return 1
+}
+
+# 屏蔽tcping检测（通过IP地址）
+block_tcping_detection() {
+    local ip_or_domain="$1"
+    local family="${2:-inet}"
+    local table="${3:-filter}"
+    local chain="${4:-input}"
+    
+    if [[ -z "$ip_or_domain" ]]; then
+        log_error "用法: block-tcping <ip-or-domain> [family] [table] [chain]"
+        log_info "例如: block-tcping itdog.cn"
+        log_info "例如: block-tcping 115.238.196.29"
+        return 1
+    fi
+    
+    # 创建表和链（如果不存在）
+    nft create table "$family" "$table" 2>/dev/null
+    nft create chain "$family" "$table" "$chain" '{ type filter hook input priority 0; }' 2>/dev/null
+    
+    # 判断是IP还是域名
+    local ip_list=()
+    
+    if [[ "$ip_or_domain" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]]; then
+        # 是IP地址或CIDR
+        ip_list+=("$ip_or_domain")
+        log_info "检测到IP地址/CIDR: $ip_or_domain"
+    else
+        # 是域名，需要解析
+        log_info "正在解析域名: $ip_or_domain"
+        local ips
+        ips=$(find_detection_ips "$ip_or_domain")
+        if [[ $? -eq 0 && -n "$ips" ]]; then
+            while IFS= read -r ip; do
+                [[ -n "$ip" ]] && ip_list+=("$ip")
+            done <<< "$ips"
+        else
+            log_error "无法解析域名: $ip_or_domain"
+            log_info "提示：可以手动输入IP地址"
+            return 1
+        fi
+    fi
+    
+    # 添加屏蔽规则
+    local count=0
+    for ip in "${ip_list[@]}"; do
+        # 检查规则是否已存在
+        if nft list chain "$family" "$table" "$chain" 2>/dev/null | grep -q "ip saddr $ip"; then
+            log_warn "规则已存在: $ip (跳过)"
+            continue
+        fi
+        
+        # 添加屏蔽规则：屏蔽来自该IP的所有TCP连接（包括tcping）
+        if nft add rule "$family" "$table" "$chain" ip saddr "$ip" tcp drop 2>/dev/null; then
+            log_success "已屏蔽IP: $ip (阻止tcping检测)"
+            ((count++))
+        else
+            log_error "屏蔽IP失败: $ip"
+        fi
+    done
+    
+    if [[ $count -gt 0 ]]; then
+        log_success "共屏蔽 $count 个IP地址，已阻止tcping检测"
+        log_info "提示：检测网站的检测节点可能使用多个IP，建议定期更新屏蔽列表"
+    else
+        log_warn "没有添加新的屏蔽规则（可能已全部存在）"
+    fi
+}
+
+# 屏蔽检测网站（智能识别）
+block_detection_site() {
+    local site="$1"
+    
+    if [[ -z "$site" ]]; then
+        log_error "用法: block-detection-site <site-name>"
+        log_info "支持的网站: itdog, itdog.cn, 17ce, chinaz, boce"
+        return 1
+    fi
+    
+    # 支持的检测网站域名列表
+    local domains=()
+    
+    case "$site" in
+        itdog|itdog.cn)
+            domains=("itdog.cn" "www.itdog.cn")
+            ;;
+        17ce|17ce.com)
+            domains=("17ce.com" "www.17ce.com")
+            ;;
+        chinaz|chinaz.com)
+            domains=("chinaz.com" "www.chinaz.com")
+            ;;
+        boce|boce.com)
+            domains=("boce.com" "www.boce.com")
+            ;;
+        *)
+            # 尝试直接作为域名处理
+            domains=("$site")
+            ;;
+    esac
+    
+    log_info "正在屏蔽检测网站: $site"
+    
+    local total_count=0
+    for domain in "${domains[@]}"; do
+        log_info "处理域名: $domain"
+        block_tcping_detection "$domain"
+        total_count=$((total_count + $?))
+    done
+    
+    if [[ $total_count -gt 0 ]]; then
+        log_success "已屏蔽检测网站: $site"
+    else
+        log_warn "未能屏蔽检测网站: $site"
+    fi
+}
+
 # 清屏函数
 clear_screen() {
     clear
@@ -1292,6 +1449,7 @@ show_main_menu() {
     echo "  73) 设置配额"
     echo "  74) 屏蔽User-Agent"
     echo "  75) 字符串匹配"
+    echo "  76) 屏蔽tcping检测（推荐用于阻止检测网站）"
     echo ""
     echo -e "${GREEN}【其他】${NC}"
     echo "  90) 查看帮助"
@@ -1845,10 +2003,16 @@ interactive_menu() {
                             log_debug "字符串长度: $string_length 字节 = $length_bits 位"
                             
                             # 尝试添加规则（使用正确的nftables语法）
+                            # 注意：nftables payload匹配语法：@base,offset,length "string"
+                            # 需要将字符串转换为十六进制或使用正确语法
+                            
                             if [[ "$all_ports" == "true" ]]; then
                                 # 全端口屏蔽：不限制端口
                                 log_info "正在添加全端口屏蔽规则..."
-                                # 先尝试使用@ih（inner header，传输层之后的数据）
+                                
+                                # nftables payload匹配的正确语法
+                                # 注意：User-Agent字符串包含特殊字符，需要正确转义
+                                # 使用@ih匹配内层数据
                                 if nft add rule inet filter input tcp @ih, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
                                     log_success "已添加 User-Agent 屏蔽规则: $input1 (所有端口)"
                                     log_warn "请测试规则是否正常工作，如无效请调整偏移量"
@@ -1860,17 +2024,20 @@ interactive_menu() {
                                         log_success "已添加 User-Agent 屏蔽规则: $input1 (所有端口)"
                                         log_warn "请测试规则是否正常工作，如无效请调整偏移量"
                                     else
-                                        log_error "添加规则失败，可能是语法错误或偏移量不正确"
-                                        log_info "建议：使用 Web 服务器层面（nginx/Apache）进行 User-Agent 过滤"
-                                        log_info "参考文档：nftables_user_agent_blocking.md"
-                                        log_info "提示：nftables payload匹配需要精确的位偏移量，建议使用tcpdump分析实际数据包"
-                                        log_info "提示：不同的nftables版本可能支持不同的payload匹配语法"
+                                        log_error "添加规则失败"
+                                        log_warn ""
+                                        log_warn "⚠️  重要提示："
+                                        log_warn "1. tcping 检测不是 HTTP 请求，无法通过 User-Agent 屏蔽"
+                                        log_warn "2. 要阻止 tcping 检测，需要使用 IP 地址屏蔽"
+                                        log_warn "3. 建议使用【76号选项：屏蔽tcping检测】功能"
+                                        log_info ""
+                                        log_info "提示：nftables payload匹配语法复杂，建议使用 IP 地址屏蔽更可靠"
                                     fi
                                 fi
                             else
                                 # 指定端口屏蔽
                                 log_info "正在添加指定端口屏蔽规则..."
-                                # 先尝试使用@ih（inner header，传输层之后的数据）
+                                
                                 if nft add rule inet filter input tcp dport "$input2" @ih, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
                                     log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
                                     log_warn "请测试规则是否正常工作，如无效请调整偏移量"
@@ -1882,11 +2049,14 @@ interactive_menu() {
                                         log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
                                         log_warn "请测试规则是否正常工作，如无效请调整偏移量"
                                     else
-                                        log_error "添加规则失败，可能是语法错误或偏移量不正确"
-                                        log_info "建议：使用 Web 服务器层面（nginx/Apache）进行 User-Agent 过滤"
-                                        log_info "参考文档：nftables_user_agent_blocking.md"
-                                        log_info "提示：nftables payload匹配需要精确的位偏移量，建议使用tcpdump分析实际数据包"
-                                        log_info "提示：不同的nftables版本可能支持不同的payload匹配语法"
+                                        log_error "添加规则失败"
+                                        log_warn ""
+                                        log_warn "⚠️  重要提示："
+                                        log_warn "1. tcping 检测不是 HTTP 请求，无法通过 User-Agent 屏蔽"
+                                        log_warn "2. 要阻止 tcping 检测，需要使用 IP 地址屏蔽"
+                                        log_warn "3. 建议使用【76号选项：屏蔽tcping检测】功能"
+                                        log_info ""
+                                        log_info "提示：nftables payload匹配语法复杂，建议使用 IP 地址屏蔽更可靠"
                                     fi
                                 fi
                             fi
@@ -1912,6 +2082,68 @@ interactive_menu() {
                     log_error "字符串不能为空"
                 fi
                 wait_for_key
+                ;;
+            76)
+                clear_screen
+                echo -e "${CYAN}屏蔽tcping检测（推荐用于阻止检测网站）${NC}"
+                echo ""
+                echo -e "${YELLOW}说明：${NC}"
+                echo "  - tcping 检测不是 HTTP 请求，无法通过 User-Agent 屏蔽"
+                echo "  - 需要通过屏蔽检测网站的 IP 地址来阻止 tcping 检测"
+                echo "  - 支持输入域名（自动解析IP）或直接输入IP地址/CIDR"
+                echo ""
+                echo -e "${GREEN}支持的检测网站：${NC}"
+                echo "  - itdog / itdog.cn"
+                echo "  - 17ce / 17ce.com"
+                echo "  - chinaz / chinaz.com"
+                echo "  - boce / boce.com"
+                echo ""
+                
+                {
+                    echo -ne "${CYAN}输入检测网站域名或IP地址${NC} (例如: itdog.cn 或 115.238.196.29): "
+                } >&2
+                read -r input1 < /dev/tty 2>/dev/null || read -r input1
+                echo ""
+                
+                if [[ -z "$input1" ]]; then
+                    log_error "输入不能为空"
+                    wait_for_key
+                else
+                    # 显示提示：是否自动解析域名
+                    {
+                        echo -ne "${CYAN}是否自动查找并屏蔽该域名相关的所有IP？(yes/no)${NC} [默认: yes]: "
+                    } >&2
+                    read -r auto_find < /dev/tty 2>/dev/null || read -r auto_find
+                    echo ""
+                    
+                    if [[ -z "$auto_find" ]]; then
+                        auto_find="yes"
+                    fi
+                    
+                    input2=$(read_input "地址族" "inet")
+                    input3=$(read_input "表名称" "filter")
+                    input4=$(read_input "链名称" "input")
+                    
+                    # 执行屏蔽操作
+                    clear_screen
+                    
+                    # 如果是域名且选择自动查找，先查找相关IP
+                    if [[ "$auto_find" == "yes" && ! "$input1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]]; then
+                        log_info "正在查找 $input1 的相关IP地址..."
+                        local found_ips
+                        found_ips=$(find_detection_ips "$input1")
+                        if [[ $? -eq 0 && -n "$found_ips" ]]; then
+                            log_info "找到以下IP地址，将全部屏蔽："
+                            echo "$found_ips" | while IFS= read -r ip; do
+                                [[ -n "$ip" ]] && echo "  - $ip"
+                            done
+                            echo ""
+                        fi
+                    fi
+                    
+                    block_tcping_detection "$input1" "$input2" "$input3" "$input4"
+                    wait_for_key
+                fi
                 ;;
             90)
                 clear_screen
@@ -2119,6 +2351,17 @@ main() {
         string-match)
             init_check
             string_match "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+            ;;
+        block-tcping)
+            init_check
+            block_tcping_detection "$2" "$3" "$4" "$5"
+            ;;
+        block-detection-site)
+            init_check
+            block_detection_site "$2"
+            ;;
+        find-detection-ips)
+            find_detection_ips "$2"
             ;;
         *)
             log_error "未知命令: $command"
