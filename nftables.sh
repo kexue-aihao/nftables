@@ -243,10 +243,12 @@ ${CYAN}========================================
 ========================================${NC}
 
 ${GREEN}使用方法：${NC}
-  $SCRIPT_NAME                    # 进入交互式菜单模式（推荐）
+  $SCRIPT_NAME                    # 进入交互式菜单模式（推荐）⭐
   $SCRIPT_NAME interactive         # 进入交互式菜单模式
   $SCRIPT_NAME menu                # 进入交互式菜单模式
   $SCRIPT_NAME [命令] [选项]        # 命令行模式
+
+${YELLOW}💡 提示：直接运行脚本（不带参数）将进入交互式菜单模式${NC}
 
 ${GREEN}基本命令：${NC}
   list          - 列出所有规则
@@ -1751,10 +1753,17 @@ interactive_menu() {
 
 # 主函数
 main() {
-    local command="${1:-}"
+    # 如果没有参数，直接进入交互模式
+    if [[ $# -eq 0 ]]; then
+        init_check
+        interactive_menu
+        return
+    fi
     
-    # 如果没有参数或参数为 interactive/menu，进入交互模式
-    if [[ -z "$command" ]] || [[ "$command" == "interactive" ]] || [[ "$command" == "menu" ]]; then
+    local command="$1"
+    
+    # 如果参数为 interactive/menu，进入交互模式
+    if [[ "$command" == "interactive" ]] || [[ "$command" == "menu" ]]; then
         init_check
         interactive_menu
         return
