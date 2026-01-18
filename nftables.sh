@@ -1120,13 +1120,25 @@ block_user_agent() {
     log_info "提示：使用 tcpdump -A 或 Wireshark 分析实际数据包来确定正确的偏移量"
     
     # 方法1：尝试匹配 "User-Agent: <string>" 在指定偏移量
-    if nft add rule "$family" "$table" "$chain" tcp dport "$port" @th, "$offset", "$length_bits" "{ \"User-Agent: $user_agent\" }" drop 2>/dev/null; then
+    # 注意：nftables payload匹配语法：@th,offset_bits,length_bits "string"
+    # 将字节偏移量转换为位偏移量
+    offset_bits=$((offset * 8))
+    match_string="User-Agent: $user_agent"
+    
+    # 尝试使用@ih（inner header，传输层之后的数据）
+    if nft add rule "$family" "$table" "$chain" tcp dport "$port" @ih, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
         log_success "已添加 User-Agent 屏蔽规则: $user_agent (端口: $port)"
         log_warn "请测试规则是否正常工作，如无效请调整偏移量"
     else
-        log_error "添加规则失败"
-        log_info "建议：使用 Web 服务器层面进行 User-Agent 过滤"
-        return 1
+        # 如果@ih失败，尝试使用@th
+        if nft add rule "$family" "$table" "$chain" tcp dport "$port" @th, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
+            log_success "已添加 User-Agent 屏蔽规则: $user_agent (端口: $port)"
+            log_warn "请测试规则是否正常工作，如无效请调整偏移量"
+        else
+            log_error "添加规则失败，可能是语法错误或偏移量不正确"
+            log_info "建议：使用 Web 服务器层面进行 User-Agent 过滤"
+            return 1
+        fi
     fi
 }
 
@@ -1154,12 +1166,23 @@ string_match() {
     nft create table "$family" "$table" 2>/dev/null
     nft create chain "$family" "$table" "$chain" '{ type filter hook input priority 0; }' 2>/dev/null
     
-    if nft add rule "$family" "$table" "$chain" tcp dport "$port" @th, "$offset", "$length_bits" "{ \"$string\" }" "$target" 2>/dev/null; then
+    # 注意：nftables payload匹配语法：@th,offset_bits,length_bits "string"
+    # 将字节偏移量转换为位偏移量
+    offset_bits=$((offset * 8))
+    
+    # 尝试使用@ih（inner header，传输层之后的数据）
+    if nft add rule "$family" "$table" "$chain" tcp dport "$port" @ih, "$offset_bits", "$length_bits" "$string" "$target" 2>&1; then
         log_success "已添加字符串匹配规则: $string -> $target"
         log_warn "注意：此功能仅适用于明文 HTTP，不适用于 HTTPS"
     else
-        log_error "添加规则失败"
-        return 1
+        # 如果@ih失败，尝试使用@th
+        if nft add rule "$family" "$table" "$chain" tcp dport "$port" @th, "$offset_bits", "$length_bits" "$string" "$target" 2>&1; then
+            log_success "已添加字符串匹配规则: $string -> $target"
+            log_warn "注意：此功能仅适用于明文 HTTP，不适用于 HTTPS"
+        else
+            log_error "添加规则失败，可能是语法错误或偏移量不正确"
+            return 1
+        fi
     fi
 }
 
@@ -1741,18 +1764,43 @@ interactive_menu() {
                         nft create chain inet filter input '{ type filter hook input priority 0; }' 2>/dev/null
                         
                         # 计算字符串长度（字节）
-                        string_length=$(echo -n "User-Agent: $input1" | wc -c)
+                        match_string="User-Agent: $input1"
+                        string_length=$(echo -n "$match_string" | wc -c)
                         length_bits=$((string_length * 8))
                         
                         # 添加规则
-                        if nft add rule inet filter input tcp dport "$input2" @th, "$input3", "$length_bits" "{ \"User-Agent: $input1\" }" drop 2>/dev/null; then
+                        # 注意：nftables payload匹配语法：@th,offset_bits,length_bits "string"
+                        # offset和length都是位（bits），不是字节
+                        # 将字节偏移量转换为位偏移量
+                        offset_bits=$((input3 * 8))
+                        
+                        log_info "正在尝试添加规则..."
+                        log_debug "偏移量: $input3 字节 = $offset_bits 位"
+                        log_debug "字符串长度: $string_length 字节 = $length_bits 位"
+                        
+                        # 构建完整的匹配字符串
+                        match_string="User-Agent: $input1"
+                        
+                        # 尝试添加规则（使用正确的nftables语法）
+                        # 注意：nftables的payload匹配可能需要使用@ih而不是@th
+                        # @ih表示inner header（传输层之后的数据）
+                        if nft add rule inet filter input tcp dport "$input2" @ih, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
                             log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
                             log_warn "请测试规则是否正常工作，如无效请调整偏移量"
                             log_info "提示：使用 'tcpdump -A' 或 Wireshark 分析实际数据包来确定正确的偏移量"
                         else
-                            log_error "添加规则失败"
-                            log_info "建议：使用 Web 服务器层面（nginx/Apache）进行 User-Agent 过滤"
-                            log_info "参考文档：nftables_user_agent_blocking.md"
+                            # 如果@ih失败，尝试使用@th
+                            log_warn "使用@ih失败，尝试使用@th..."
+                            if nft add rule inet filter input tcp dport "$input2" @th, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
+                                log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
+                                log_warn "请测试规则是否正常工作，如无效请调整偏移量"
+                            else
+                                log_error "添加规则失败，可能是语法错误或偏移量不正确"
+                                log_info "建议：使用 Web 服务器层面（nginx/Apache）进行 User-Agent 过滤"
+                                log_info "参考文档：nftables_user_agent_blocking.md"
+                                log_info "提示：nftables payload匹配需要精确的位偏移量，建议使用tcpdump分析实际数据包"
+                                log_info "提示：不同的nftables版本可能支持不同的payload匹配语法"
+                            fi
                         fi
                     else
                         log_info "操作已取消"
