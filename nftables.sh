@@ -1775,13 +1775,20 @@ interactive_menu() {
                         log_error "User-Agent字符串不能为空"
                         wait_for_key
                     else
-                        # 输入端口
+                        # 输入端口（支持全端口：all 或 *）
                         {
-                            echo -ne "${CYAN}端口 (默认: 80)${NC} [默认: 80]: "
+                            echo -ne "${CYAN}端口 (默认: 80, 输入 all 或 * 表示所有端口)${NC} [默认: 80]: "
                         } >&2
                         read -r input2 < /dev/tty 2>/dev/null || read -r input2
                         if [[ -z "$input2" ]]; then
                             input2="80"
+                        fi
+                        
+                        # 处理全端口选项
+                        all_ports=false
+                        if [[ "$input2" == "all" ]] || [[ "$input2" == "*" ]] || [[ "$input2" == "ALL" ]]; then
+                            all_ports=true
+                            input2="all"
                         fi
                         
                         # 输入字节偏移量
@@ -1797,7 +1804,11 @@ interactive_menu() {
                         echo ""
                         echo -e "${CYAN}将要添加以下规则：${NC}"
                         echo "  User-Agent: $input1"
-                        echo "  端口: $input2"
+                        if [[ "$all_ports" == "true" ]]; then
+                            echo "  端口: 所有端口 (all)"
+                        else
+                            echo "  端口: $input2"
+                        fi
                         echo "  偏移量: $input3"
                         echo ""
                         
@@ -1834,23 +1845,49 @@ interactive_menu() {
                             log_debug "字符串长度: $string_length 字节 = $length_bits 位"
                             
                             # 尝试添加规则（使用正确的nftables语法）
-                            # 先尝试使用@ih（inner header，传输层之后的数据）
-                            if nft add rule inet filter input tcp dport "$input2" @ih, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
-                                log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
-                                log_warn "请测试规则是否正常工作，如无效请调整偏移量"
-                                log_info "提示：使用 'tcpdump -A' 或 Wireshark 分析实际数据包来确定正确的偏移量"
+                            if [[ "$all_ports" == "true" ]]; then
+                                # 全端口屏蔽：不限制端口
+                                log_info "正在添加全端口屏蔽规则..."
+                                # 先尝试使用@ih（inner header，传输层之后的数据）
+                                if nft add rule inet filter input tcp @ih, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
+                                    log_success "已添加 User-Agent 屏蔽规则: $input1 (所有端口)"
+                                    log_warn "请测试规则是否正常工作，如无效请调整偏移量"
+                                    log_info "提示：使用 'tcpdump -A' 或 Wireshark 分析实际数据包来确定正确的偏移量"
+                                else
+                                    # 如果@ih失败，尝试使用@th
+                                    log_warn "使用@ih失败，尝试使用@th..."
+                                    if nft add rule inet filter input tcp @th, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
+                                        log_success "已添加 User-Agent 屏蔽规则: $input1 (所有端口)"
+                                        log_warn "请测试规则是否正常工作，如无效请调整偏移量"
+                                    else
+                                        log_error "添加规则失败，可能是语法错误或偏移量不正确"
+                                        log_info "建议：使用 Web 服务器层面（nginx/Apache）进行 User-Agent 过滤"
+                                        log_info "参考文档：nftables_user_agent_blocking.md"
+                                        log_info "提示：nftables payload匹配需要精确的位偏移量，建议使用tcpdump分析实际数据包"
+                                        log_info "提示：不同的nftables版本可能支持不同的payload匹配语法"
+                                    fi
+                                fi
                             else
-                                # 如果@ih失败，尝试使用@th
-                                log_warn "使用@ih失败，尝试使用@th..."
-                                if nft add rule inet filter input tcp dport "$input2" @th, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
+                                # 指定端口屏蔽
+                                log_info "正在添加指定端口屏蔽规则..."
+                                # 先尝试使用@ih（inner header，传输层之后的数据）
+                                if nft add rule inet filter input tcp dport "$input2" @ih, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
                                     log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
                                     log_warn "请测试规则是否正常工作，如无效请调整偏移量"
+                                    log_info "提示：使用 'tcpdump -A' 或 Wireshark 分析实际数据包来确定正确的偏移量"
                                 else
-                                    log_error "添加规则失败，可能是语法错误或偏移量不正确"
-                                    log_info "建议：使用 Web 服务器层面（nginx/Apache）进行 User-Agent 过滤"
-                                    log_info "参考文档：nftables_user_agent_blocking.md"
-                                    log_info "提示：nftables payload匹配需要精确的位偏移量，建议使用tcpdump分析实际数据包"
-                                    log_info "提示：不同的nftables版本可能支持不同的payload匹配语法"
+                                    # 如果@ih失败，尝试使用@th
+                                    log_warn "使用@ih失败，尝试使用@th..."
+                                    if nft add rule inet filter input tcp dport "$input2" @th, "$offset_bits", "$length_bits" "$match_string" drop 2>&1; then
+                                        log_success "已添加 User-Agent 屏蔽规则: $input1 (端口: $input2)"
+                                        log_warn "请测试规则是否正常工作，如无效请调整偏移量"
+                                    else
+                                        log_error "添加规则失败，可能是语法错误或偏移量不正确"
+                                        log_info "建议：使用 Web 服务器层面（nginx/Apache）进行 User-Agent 过滤"
+                                        log_info "参考文档：nftables_user_agent_blocking.md"
+                                        log_info "提示：nftables payload匹配需要精确的位偏移量，建议使用tcpdump分析实际数据包"
+                                        log_info "提示：不同的nftables版本可能支持不同的payload匹配语法"
+                                    fi
                                 fi
                             fi
                         else
