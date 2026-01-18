@@ -1312,7 +1312,10 @@ read_input() {
         echo -ne "${CYAN}$prompt${NC}: "
     fi
     
-    read input
+    # 确保输出立即刷新
+    # stty sane 2>/dev/null  # 恢复终端设置（如果需要）
+    
+    read -r input
     if [[ -z "$input" && -n "$default" ]]; then
         echo "$default"
     else
@@ -1737,13 +1740,26 @@ interactive_menu() {
                 echo -e "${YELLOW}  3. 不适用于 HTTP/2${NC}"
                 echo -e "${YELLOW}  4. 强烈建议使用 Web 服务器层面进行过滤${NC}"
                 echo ""
-                input1=$(read_input "User-Agent字符串" "")
-                if [[ -z "$input1" ]]; then
-                    log_error "User-Agent字符串不能为空"
+                
+                # 先询问是否继续
+                echo -ne "${CYAN}是否继续使用此功能？(yes/no)${NC} [默认: no]: "
+                read -r confirm_continue
+                if [[ -z "$confirm_continue" ]]; then
+                    confirm_continue="no"
+                fi
+                
+                if [[ "$confirm_continue" != "yes" ]]; then
+                    log_info "操作已取消"
                     wait_for_key
                 else
-                    input2=$(read_input "端口 (默认: 80)" "80")
-                    input3=$(read_input "字节偏移量 (默认: 200，需要根据实际情况调整)" "200")
+                    echo ""
+                    input1=$(read_input "User-Agent字符串" "")
+                    if [[ -z "$input1" ]]; then
+                        log_error "User-Agent字符串不能为空"
+                        wait_for_key
+                    else
+                        input2=$(read_input "端口 (默认: 80)" "80")
+                        input3=$(read_input "字节偏移量 (默认: 200，需要根据实际情况调整)" "200")
                     
                     # 显示确认信息
                     echo ""
@@ -1805,7 +1821,8 @@ interactive_menu() {
                     else
                         log_info "操作已取消"
                     fi
-                    wait_for_key
+                        wait_for_key
+                    fi
                 fi
                 ;;
             75)
